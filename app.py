@@ -227,7 +227,7 @@ elif menu == "⚙️ 导入数据":
                     # 优先使用 MiniMax，否则用 OpenAI
                     api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
                     base_url = "https://api.minimax.chat/v1" if os.getenv("MINIMAX_API_KEY") else "https://api.openai.com/v1"
-                    model = "MiniMax-Text-01" if os.getenv("MINIMAX_API_KEY") else "gpt-4o-mini"
+                    model = os.getenv("MINIMAX_MODEL") or ("MiniMax-M2.7" if os.getenv("MINIMAX_API_KEY") else "gpt-4o-mini")
                     
                     client = OpenAI(api_key=api_key, base_url=base_url)
                     

@@ -131,8 +131,8 @@ def parse_with_llm(texts, api_key=None, base_url=None, model=None):
     # 支持自定义 API 地址（如硅基流动）
     base_url = base_url or os.getenv("MINIMAX_BASE_URL") or "https://api.minimax.chat/v1"
 
-    # 支持自定义模型，默认用 abab6.5s-chat（更通用的模型）
-    model = model or os.getenv("MINIMAX_MODEL") or "abab6.5s-chat"
+    # 支持自定义模型，默认用 MiniMax-M2.7
+    model = model or os.getenv("MINIMAX_MODEL") or "MiniMax-M2.7"
 
     # 合并所有页面文本
     full_text = "\n".join(texts)
