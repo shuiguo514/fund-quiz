@@ -1,6 +1,7 @@
 import streamlit as st
 import json
 import random
+import os
 from datetime import datetime
 import database as db
 
@@ -222,8 +223,13 @@ elif menu == "⚙️ 导入数据":
         if q_text.strip():
             with st.spinner("🧠 LLM 正在智能解析题目，请稍候..."):
                 try:
-                    import openai
-                    client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY", "your-api-key"), base_url="https://api.openai.com/v1")
+                    from openai import OpenAI
+                    # 优先使用 MiniMax，否则用 OpenAI
+                    api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
+                    base_url = "https://api.minimax.chat/v1" if os.getenv("MINIMAX_API_KEY") else "https://api.openai.com/v1"
+                    model = "MiniMax-Text-01" if os.getenv("MINIMAX_API_KEY") else "gpt-4o-mini"
+                    
+                    client = OpenAI(api_key=api_key, base_url=base_url)
                     
                     prompt = f"""你是一个基金题库专家。请从以下文本中解析出所有题目，输出JSON数组格式。
 每道题包含：question_text（题干）、options（选项，字典A-D）、answer（答案字母）、explanation（解析）
@@ -238,9 +244,10 @@ elif menu == "⚙️ 导入数据":
 4. 只输出JSON数组，不要其他文字"""
                     
                     response = client.chat.completions.create(
-                        model="gpt-4o-mini",
+                        model=model,
                         messages=[{"role": "user", "content": prompt}],
-                        temperature=0.1
+                        temperature=0.1,
+                        response_format={"type": "json_object"}
                     )
                     
                     import json as json_mod
@@ -251,7 +258,17 @@ elif menu == "⚙️ 导入数据":
                     elif "```" in result_text:
                         result_text = result_text.split("```")[1].split("```")[0]
                     
-                    questions_data = json_mod.loads(result_text)
+                    # 兼容 dict 或 list 格式
+                    raw = json_mod.loads(result_text)
+                    if isinstance(raw, dict):
+                        if "questions" in raw:
+                            questions_data = raw["questions"]
+                        elif "data" in raw:
+                            questions_data = raw["data"]
+                        else:
+                            questions_data = list(raw.values())[0] if raw else []
+                    else:
+                        questions_data = raw
                     
                     added = 0
                     for q in questions_data:
@@ -278,21 +295,39 @@ elif menu == "⚙️ 导入数据":
             st.warning("请先输入题目文本")
     
     st.divider()
-    st.subheader("📄 PDF 导入（备选）")
+    st.subheader("📄 PDF 导入")
     pdf_dir = st.text_input("PDF 目录路径", r"D:\Desktop\基金从业\法规")
     
+    # 解析模式选择
+    parse_mode = st.radio(
+        "解析模式",
+        ["⚡ 正则匹配（快速）", "🧠 LLM 智能解析（精准）"],
+        index=1,
+        horizontal=True,
+        help="正则匹配：速度快，但依赖固定格式。LLM 智能解析：能处理各种混乱格式，精准提取。"
+    )
+    use_llm = (parse_mode == "🧠 LLM 智能解析（精准）")
+    
     if st.button("🔍 扫描并导入 PDF", type="secondary"):
-        with st.spinner("正在导入，请稍候..."):
+        with st.spinner("🧠 LLM 正在智能解析..." if use_llm else "正在导入..."):
             import pdf_parser as pp
+            import os
             
-            results = pp.process_all_pdfs(pdf_dir, db)
+            # 获取 API Key
+            api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY") or st.text_input("🔑 API Key（留空则使用环境变量）", type="password")
             
-            for r in results:
-                if 'error' in r:
-                    st.error(f"❌ {r['file']}: {r['error']}")
-                else:
-                    icon = "📚" if r['type'] == 'knowledge' else "📝"
-                    st.success(f"{icon} {r['file']}：导入 {r['count']} 条")
+            if use_llm and not api_key:
+                st.error("❌ LLM 解析模式需要提供 API Key")
+            else:
+                results = pp.process_all_pdfs(pdf_dir, db, use_llm=use_llm, llm_api_key=api_key if use_llm else None)
+                
+                for r in results:
+                    if 'error' in r:
+                        st.error(f"❌ {r['file']}: {r['error']}")
+                    else:
+                        icon = "📚" if r['type'] == 'knowledge' else "📝"
+                        mode_tag = "🧠" if r.get('mode') == 'llm' else "⚡"
+                        st.success(f"{icon} {r['file']}：导入 {r['count']} 条 {mode_tag}")
         
         total, wrong = db.get_stats()
         kps = db.get_knowledge_points()

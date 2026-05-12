@@ -1,6 +1,11 @@
-import fitz, re, os
+import fitz, re, os, json
+
+# ============================================================
+# MiniMax LLM 解析模式
+# ============================================================
 
 def extract_all_text(pdf_path):
+    """提取 PDF 所有页面的文本"""
     doc = fitz.open(pdf_path)
     all_text = []
     for page in doc:
@@ -10,13 +15,11 @@ def extract_all_text(pdf_path):
     doc.close()
     return all_text
 
+
 def parse_exam_questions(texts):
-    Q_SEP_SET = {0x3001, 0xFF0B}   # 、for 1-9, ＋for 10+
-    O_SEP = 0xFF0E   #．
-    # Additional option patterns:
-    # 1) Options like A. ①xxx B. ②xxx C. ③xxx D. ④xxx (with circled numbers inside)
-    # 2) Options like A．xxx where A is followed by U+FF0E separator
-    # 3) Options like A:xxx
+    """正则模式解析题目（保留原有逻辑）"""
+    Q_SEP_SET = {0x3001, 0xFF0B}
+    O_SEP = 0xFF0E
 
     def is_question_line(s):
         if not s or len(s) < 3:
@@ -67,10 +70,7 @@ def parse_exam_questions(texts):
                     opts[s2[0]] = s2[2:].strip()
                     j += 1
                     continue
-                
-                # Multi-choice option format: A．①xxx or A．(1)xxx
-                # where after the letter+sep, the option contains circled numbers
-                # Check if it's an option by seeing if after A./B./C./D. there's an option-like structure
+
                 opt_match_multi = re.match(r'^([A-D])[．:：]\s*[(（]?[\u2460-⑨\u0030-9①②③④\d]+[)）]?\s*(.+)', s2)
                 if opt_match_multi:
                     opts[opt_match_multi.group(1)] = opt_match_multi.group(2).strip()
@@ -110,7 +110,111 @@ def parse_exam_questions(texts):
 
     return results
 
+
+def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", model="MiniMax-Text-01"):
+    """
+    使用 LLM 智能解析题目文本
+    texts: PDF 提取的页面文本列表
+    返回结构化题目列表
+    """
+    import os
+
+    api_key = api_key or os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("未设置 MINIMAX_API_KEY 或 OPENAI_API_KEY 环境变量")
+
+    # 合并所有页面文本
+    full_text = "\n".join(texts)
+
+    # 截断避免超出 token 限制（保留前 1.5 万字）
+    if len(full_text) > 15000:
+        full_text = full_text[:15000] + "\n...（内容已截断）"
+
+    prompt = f"""你是一个专业的基金从业资格考试题库解析专家。请从以下PDF文本中解析出所有题目，输出标准JSON数组格式。
+
+## 输出格式要求
+每道题必须包含以下字段：
+- question_text: string - 题干文本（保留完整题意）
+- options: object - 选项，键为A/B/C/D，值为选项文本
+- answer: string - 正确答案字母（如 "A"）
+- explanation: string - 答案解析（如果没有则为空字符串）
+- chapter: string - 章节名称（根据内容判断，如"基金法律法规"）
+
+## 解析规则
+1. 只有明确标注了答案的题目才收录
+2. 多选题必须标注所有正确选项（如 "AB"）
+3. 选项跨多行时要合并
+4. 题目和选项中的序号（如1.2.3.）要去掉，保留实际内容
+5. 如果文本中找不到选项内容，尝试根据常见考点补充合理选项
+6. 每道题都必须有ABCD四个选项
+
+## 待解析文本：
+{full_text}
+
+## 输出要求
+- 只输出JSON数组，不要任何其他文字说明
+- JSON必须能被json.loads()直接解析
+- 选项内容要完整，不能截断"""
+
+    # MiniMax / OpenAI 兼容格式
+    from openai import OpenAI
+    client = OpenAI(api_key=api_key, base_url=base_url)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        response_format={"type": "json_object"}
+    )
+
+    result_text = response.choices[0].message.content.strip()
+
+    # 提取 JSON（防止有 markdown 包裹）
+    if "```json" in result_text:
+        result_text = result_text.split("```json")[1].split("```")[0]
+    elif "```" in result_text:
+        result_text = result_text.split("```")[1].split("```")[0]
+
+    data = json.loads(result_text)
+
+    # 如果返回的是 {{"questions": [...]}} 格式
+    if isinstance(data, dict) and "questions" in data:
+        questions = data["questions"]
+    elif isinstance(data, dict) and "data" in data:
+        questions = data["data"]
+    elif isinstance(data, list):
+        questions = data
+    else:
+        # 尝试找数组
+        questions = list(data.values())[0] if len(data) == 1 else []
+
+    # 标准化格式
+    normalized = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        opts = q.get('options', {})
+        if isinstance(opts, str):
+            # 尝试解析选项字符串
+            opts = {}
+        # 确保有ABCD四个选项
+        for key in ['A', 'B', 'C', 'D']:
+            if key not in opts:
+                opts[key] = opts.get(key.lower(), opts.get(f"option_{key}", ""))
+
+        normalized.append({
+            'text': q.get('question_text', q.get('question', '')),
+            'options': opts,
+            'answer': q.get('answer', q.get('correct_answer', '')),
+            'explanation': q.get('explanation', q.get('解析', '')),
+            'chapter': q.get('chapter', q.get('category', ''))
+        })
+
+    return normalized
+
+
 def parse_knowledge_points(texts):
+    """解析知识点（保留原有逻辑）"""
     kps = []
     current_chapter = ""
     current_section = ""
@@ -146,7 +250,12 @@ def parse_knowledge_points(texts):
 
     return kps
 
-def process_pdf_file(pdf_path, db_module):
+
+def process_pdf_file(pdf_path, db_module, use_llm=False, llm_api_key=None):
+    """
+    处理单个 PDF 文件
+    use_llm=True 时使用 LLM 智能解析
+    """
     filename = os.path.basename(pdf_path)
     is_knowledge = any(k in filename for k in ['笔记', '知识点', '三色', '考点', '教材', '目录'])
 
@@ -160,14 +269,28 @@ def process_pdf_file(pdf_path, db_module):
             db_module.insert_knowledge_point(kp['chapter'], kp['section'], kp['title'], kp['level'], kp['content'], filename)
         return {'file': filename, 'type': 'knowledge', 'count': len(kps)}
     else:
-        questions = parse_exam_questions(texts)
-        chapter = filename.replace('.pdf', '')[:100]
-        for q in questions:
-            if q['options'] and len(q['options']) >= 2:
-                db_module.insert_question(q['text'], q['options'], q['answer'], q['explanation'], chapter, '', filename)
-        return {'file': filename, 'type': 'questions', 'count': len(questions)}
+        if use_llm:
+            questions = parse_with_llm(texts, api_key=llm_api_key)
+            chapter = filename.replace('.pdf', '')[:100]
+            for q in questions:
+                opts = q.get('options', {})
+                if opts and len(opts) >= 2 and q.get('answer'):
+                    db_module.insert_question(
+                        q['text'], opts, q['answer'],
+                        q.get('explanation', ''), chapter, '', filename
+                    )
+            return {'file': filename, 'type': 'questions', 'count': len(questions), 'mode': 'llm'}
+        else:
+            questions = parse_exam_questions(texts)
+            chapter = filename.replace('.pdf', '')[:100]
+            for q in questions:
+                if q['options'] and len(q['options']) >= 2:
+                    db_module.insert_question(q['text'], q['options'], q['answer'], q['explanation'], chapter, '', filename)
+            return {'file': filename, 'type': 'questions', 'count': len(questions), 'mode': 'regex'}
 
-def process_all_pdfs(pdf_dir, db_module):
+
+def process_all_pdfs(pdf_dir, db_module, use_llm=False, llm_api_key=None):
+    """批量处理 PDF 目录"""
     results = []
     if not os.path.isdir(pdf_dir):
         return [{'error': f'Directory not found: {pdf_dir}'}]
@@ -176,7 +299,7 @@ def process_all_pdfs(pdf_dir, db_module):
             continue
         fpath = os.path.join(pdf_dir, fname)
         try:
-            result = process_pdf_file(fpath, db_module)
+            result = process_pdf_file(fpath, db_module, use_llm=use_llm, llm_api_key=llm_api_key)
             results.append(result)
         except Exception as e:
             results.append({'file': fname, 'error': str(e)})
