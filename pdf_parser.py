@@ -111,11 +111,16 @@ def parse_exam_questions(texts):
     return results
 
 
-def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", model="MiniMax-Text-01"):
+def parse_with_llm(texts, api_key=None, base_url=None, model=None):
     """
     使用 LLM 智能解析题目文本
     texts: PDF 提取的页面文本列表
     返回结构化题目列表
+
+    环境变量配置（可选）：
+    - MINIMAX_API_KEY / OPENAI_API_KEY
+    - MINIMAX_BASE_URL（自定义API地址，如硅基流动）
+    - MINIMAX_MODEL（模型名，默认 abab6.5s-chat）
     """
     import os
 
@@ -123,12 +128,18 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
     if not api_key:
         raise ValueError("未设置 MINIMAX_API_KEY 或 OPENAI_API_KEY 环境变量")
 
+    # 支持自定义 API 地址（如硅基流动）
+    base_url = base_url or os.getenv("MINIMAX_BASE_URL") or "https://api.minimax.chat/v1"
+
+    # 支持自定义模型，默认用 abab6.5s-chat（更通用的模型）
+    model = model or os.getenv("MINIMAX_MODEL") or "abab6.5s-chat"
+
     # 合并所有页面文本
     full_text = "\n".join(texts)
 
-    # 截断避免超出 token 限制（保留前 1.5 万字）
-    if len(full_text) > 15000:
-        full_text = full_text[:15000] + "\n...（内容已截断）"
+    # 截断避免超出 token 限制（保留前 1.2 万字，约 3000 token）
+    if len(full_text) > 12000:
+        full_text = full_text[:12000] + "\n...（内容已截断）"
 
     prompt = f"""你是一个专业的基金从业资格考试题库解析专家。请从以下PDF文本中解析出所有题目，输出标准JSON数组格式。
 
@@ -145,8 +156,7 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
 2. 多选题必须标注所有正确选项（如 "AB"）
 3. 选项跨多行时要合并
 4. 题目和选项中的序号（如1.2.3.）要去掉，保留实际内容
-5. 如果文本中找不到选项内容，尝试根据常见考点补充合理选项
-6. 每道题都必须有ABCD四个选项
+5. 每道题都必须有ABCD四个选项
 
 ## 待解析文本：
 {full_text}
@@ -156,7 +166,6 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
 - JSON必须能被json.loads()直接解析
 - 选项内容要完整，不能截断"""
 
-    # MiniMax / OpenAI 兼容格式
     from openai import OpenAI
     client = OpenAI(api_key=api_key, base_url=base_url)
 
@@ -176,16 +185,18 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
 
     data = json.loads(result_text)
 
-    # 如果返回的是 {{"questions": [...]}} 格式
-    if isinstance(data, dict) and "questions" in data:
-        questions = data["questions"]
-    elif isinstance(data, dict) and "data" in data:
-        questions = data["data"]
-    elif isinstance(data, list):
-        questions = data
+    # 兼容各种返回格式
+    if isinstance(data, dict):
+        if "questions" in data:
+            questions = data["questions"]
+        elif "data" in data:
+            questions = data["data"]
+        elif "result" in data:
+            questions = data["result"]
+        else:
+            questions = list(data.values())[0] if data else []
     else:
-        # 尝试找数组
-        questions = list(data.values())[0] if len(data) == 1 else []
+        questions = data or []
 
     # 标准化格式
     normalized = []
@@ -194,9 +205,7 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
             continue
         opts = q.get('options', {})
         if isinstance(opts, str):
-            # 尝试解析选项字符串
             opts = {}
-        # 确保有ABCD四个选项
         for key in ['A', 'B', 'C', 'D']:
             if key not in opts:
                 opts[key] = opts.get(key.lower(), opts.get(f"option_{key}", ""))
