@@ -296,45 +296,91 @@ elif menu == "⚙️ 导入数据":
     
     st.divider()
     st.subheader("📄 PDF 导入")
-    pdf_dir = st.text_input("PDF 目录路径", r"D:\Desktop\基金从业\法规")
     
-    # 解析模式选择
-    parse_mode = st.radio(
+    # 文件上传模式切换
+    upload_mode = st.radio(
+        "PDF 来源",
+        ["📂 目录路径（仅本地）", "☁️ 文件上传（云端可用）"],
+        horizontal=True
+    )
+    
+    use_llm = st.radio(
         "解析模式",
         ["⚡ 正则匹配（快速）", "🧠 LLM 智能解析（精准）"],
         index=1,
         horizontal=True,
         help="正则匹配：速度快，但依赖固定格式。LLM 智能解析：能处理各种混乱格式，精准提取。"
-    )
-    use_llm = (parse_mode == "🧠 LLM 智能解析（精准）")
+    ) == "🧠 LLM 智能解析（精准）"
     
-    if st.button("🔍 扫描并导入 PDF", type="secondary"):
-        with st.spinner("🧠 LLM 正在智能解析..." if use_llm else "正在导入..."):
-            import pdf_parser as pp
-            import os
-            
-            # 获取 API Key
-            api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY") or st.text_input("🔑 API Key（留空则使用环境变量）", type="password")
-            
+    # 获取 API Key
+    api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY") or st.text_input(
+        "🔑 API Key（留空则使用环境变量）", type="password",
+        help="设置 MINIMAX_API_KEY 环境变量，或在此输入"
+    )
+    
+    if upload_mode == "☁️ 文件上传（云端可用）":
+        uploaded_files = st.file_uploader(
+            "上传 PDF 文件（支持多选）",
+            type=["pdf"],
+            accept_multiple_files=True
+        )
+        
+        if st.button("🧠 开始解析并导入", type="primary", disabled=not uploaded_files):
             if use_llm and not api_key:
-                st.error("❌ LLM 解析模式需要提供 API Key（请在 Streamlit Cloud Settings > Secrets 中设置 MINIMAX_API_KEY）")
-            elif not os.path.isdir(pdf_dir):
-                st.error(f"❌ 目录不存在：{pdf_dir}（Streamlit Cloud 无法访问本地路径，请使用网盘路径或上传 PDF 文件）")
+                st.error("❌ LLM 解析模式需要提供 API Key（请设置 MINIMAX_API_KEY 环境变量）")
             else:
-                results = pp.process_all_pdfs(pdf_dir, db, use_llm=use_llm, llm_api_key=api_key if use_llm else None)
-                
-                for r in results:
-                    if 'error' in r:
-                        fname = r.get('file', '未知文件')
-                        st.error(f"❌ {fname}: {r['error']}")
-                    else:
-                        icon = "📚" if r['type'] == 'knowledge' else "📝"
-                        mode_tag = "🧠" if r.get('mode') == 'llm' else "⚡"
-                        st.success(f"{icon} {r['file']}：导入 {r['count']} 条 {mode_tag}")
+                with st.spinner("🧠 LLM 正在智能解析..." if use_llm else "正在导入..."):
+                    import tempfile, shutil
+                    import pdf_parser as pp
+                    
+                    # 创建临时目录存放上传的 PDF
+                    with tempfile.TemporaryDirectory() as tmp_dir:
+                        for uploaded_file in uploaded_files:
+                            save_path = os.path.join(tmp_dir, uploaded_file.name)
+                            with open(save_path, "wb") as f:
+                                f.write(uploaded_file.getbuffer())
+                        
+                        results = pp.process_all_pdfs(tmp_dir, db, use_llm=use_llm, llm_api_key=api_key if use_llm else None)
+                        
+                        for r in results:
+                            if 'error' in r:
+                                fname = r.get('file', '未知文件')
+                                st.error(f"❌ {fname}: {r['error']}")
+                            else:
+                                icon = "📚" if r['type'] == 'knowledge' else "📝"
+                                mode_tag = "🧠" if r.get('mode') == 'llm' else "⚡"
+                                st.success(f"{icon} {r['file']}：导入 {r['count']} 条 {mode_tag}")
         
         total, wrong = db.get_stats()
         kps = db.get_knowledge_points()
-        st.success(f"✅ 导入完成！题库：{total} 道，知识点：{len(kps)} 个，错题：{wrong} 道")
+        st.info(f"当前题库：{total} 道，知识点：{len(kps)} 个，错题：{wrong} 道")
+    
+    else:
+        pdf_dir = st.text_input("PDF 目录路径", r"D:\Desktop\基金从业\法规")
+        
+        if st.button("🔍 扫描并导入 PDF", type="secondary"):
+            with st.spinner("🧠 LLM 正在智能解析..." if use_llm else "正在导入..."):
+                import pdf_parser as pp
+                
+                if use_llm and not api_key:
+                    st.error("❌ LLM 解析模式需要提供 API Key（请设置 MINIMAX_API_KEY 环境变量）")
+                elif not os.path.isdir(pdf_dir):
+                    st.error(f"❌ 目录不存在：{pdf_dir}（本地模式仅适用桌面应用）")
+                else:
+                    results = pp.process_all_pdfs(pdf_dir, db, use_llm=use_llm, llm_api_key=api_key if use_llm else None)
+                    
+                    for r in results:
+                        if 'error' in r:
+                            fname = r.get('file', '未知文件')
+                            st.error(f"❌ {fname}: {r['error']}")
+                        else:
+                            icon = "📚" if r['type'] == 'knowledge' else "📝"
+                            mode_tag = "🧠" if r.get('mode') == 'llm' else "⚡"
+                            st.success(f"{icon} {r['file']}：导入 {r['count']} 条 {mode_tag}")
+            
+            total, wrong = db.get_stats()
+            kps = db.get_knowledge_points()
+            st.success(f"✅ 导入完成！题库：{total} 道，知识点：{len(kps)} 个，错题：{wrong} 道")
     
     st.divider()
     st.subheader("🗑️ 数据管理")
