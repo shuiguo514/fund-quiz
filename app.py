@@ -42,10 +42,11 @@ def render_question(q_row):
             else:
                 st.error(f"❌ 错误！正确答案是：{q_row['answer']}")
                 db.add_wrong_question(q_row['id'])
-            # 显示独立存储的解析
-            if q_row.get('explanation'):
+            # 安全获取 explanation（兼容 dict 和 sqlite3.Row）
+            explanation = getattr(q_row, 'explanation', '') or ''
+            if explanation:
                 with st.expander("📖 答案解析"):
-                    st.write(q_row['explanation'])
+                    st.write(explanation)
     if st.session_state.answered:
         st.markdown(f"**你的答案：{st.session_state.selected}** | **正确答案：{q_row['answer']}**")
 
