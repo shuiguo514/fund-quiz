@@ -163,8 +163,7 @@ def parse_with_llm(texts, api_key=None, base_url="https://api.minimax.chat/v1", 
     response = client.chat.completions.create(
         model=model,
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.1,
-        response_format={"type": "json_object"}
+        temperature=0.1
     )
 
     result_text = response.choices[0].message.content.strip()

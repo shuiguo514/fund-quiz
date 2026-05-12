@@ -246,8 +246,7 @@ elif menu == "⚙️ 导入数据":
                     response = client.chat.completions.create(
                         model=model,
                         messages=[{"role": "user", "content": prompt}],
-                        temperature=0.1,
-                        response_format={"type": "json_object"}
+                        temperature=0.1
                     )
                     
                     import json as json_mod
