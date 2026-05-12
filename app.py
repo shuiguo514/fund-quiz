@@ -317,13 +317,16 @@ elif menu == "⚙️ 导入数据":
             api_key = os.getenv("MINIMAX_API_KEY") or os.getenv("OPENAI_API_KEY") or st.text_input("🔑 API Key（留空则使用环境变量）", type="password")
             
             if use_llm and not api_key:
-                st.error("❌ LLM 解析模式需要提供 API Key")
+                st.error("❌ LLM 解析模式需要提供 API Key（请在 Streamlit Cloud Settings > Secrets 中设置 MINIMAX_API_KEY）")
+            elif not os.path.isdir(pdf_dir):
+                st.error(f"❌ 目录不存在：{pdf_dir}（Streamlit Cloud 无法访问本地路径，请使用网盘路径或上传 PDF 文件）")
             else:
                 results = pp.process_all_pdfs(pdf_dir, db, use_llm=use_llm, llm_api_key=api_key if use_llm else None)
                 
                 for r in results:
                     if 'error' in r:
-                        st.error(f"❌ {r['file']}: {r['error']}")
+                        fname = r.get('file', '未知文件')
+                        st.error(f"❌ {fname}: {r['error']}")
                     else:
                         icon = "📚" if r['type'] == 'knowledge' else "📝"
                         mode_tag = "🧠" if r.get('mode') == 'llm' else "⚡"
