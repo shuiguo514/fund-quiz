@@ -169,21 +169,34 @@ def parse_with_llm(texts, api_key=None, base_url=None, model=None):
     from openai import OpenAI
     client = OpenAI(api_key=api_key, base_url=base_url)
 
-    response = client.chat.completions.create(
-        model=model,
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.1
-    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.1
+        )
+    except Exception as e:
+        raise ValueError(f"API 调用失败：{e}")
 
-    result_text = response.choices[0].message.content.strip()
+    result_text = response.choices[0].message.content.strip() if response.choices else ""
 
     # 提取 JSON（防止有 markdown 包裹）
-    if "```json" in result_text:
-        result_text = result_text.split("```json")[1].split("```")[0]
-    elif "```" in result_text:
-        result_text = result_text.split("```")[1].split("```")[0]
+    if not result_text:
+        raise ValueError("LLM 返回了空响应，请检查 API Key 和模型权限")
+    
+    # 去掉 markdown 代码块包裹
+    for marker in ["```json", "```JSON", "```"]:
+        if marker in result_text:
+            parts = result_text.split(marker)
+            result_text = parts[1] if len(parts) > 1 else result_text
+            if marker != "```":
+                result_text = result_text.split("```")[0]
+            break
 
-    data = json.loads(result_text)
+    try:
+        data = json.loads(result_text)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"LLM 返回的不是有效 JSON：{e}\n原始内容：{result_text[:500]}")
 
     # 兼容各种返回格式
     if isinstance(data, dict):
